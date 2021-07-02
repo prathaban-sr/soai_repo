@@ -1,4 +1,7 @@
 '''Train CIFAR10 with PyTorch.'''
+import os
+from typing import no_type_check
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,6 +10,9 @@ import torch.backends.cudnn as cudnn
 
 import torchvision
 import torchvision.transforms as transforms
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 from soai.models.resnet import *
 from soai.utils import progress_bar
@@ -83,9 +89,13 @@ class ModelTrainer:
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            progress_bar(batch_idx, len(self.trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                        % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
+            #progress_bar(batch_idx, len(self.trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+            #            % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        
+        print("Train Loss:{:.3f},Acc:{:.3f}({}/{})".format(train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        epoch_train_loss = train_loss/(batch_idx+1)
+        epoch_train_acc = 100.*correct/total
+        return epoch_train_loss, epoch_train_acc
 
     def test(self, epoch):
         self.net.eval()
@@ -103,8 +113,10 @@ class ModelTrainer:
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
 
-                progress_bar(batch_idx, len(self.testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                            % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+                #progress_bar(batch_idx, len(self.testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                #            % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+
+        print("Test Loss:{:.3f},Acc:{:.3f}({}/{})".format(test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
         # Save checkpoint.
         acc = 100.*correct/total
@@ -115,10 +127,56 @@ class ModelTrainer:
                 'acc': acc,
                 'epoch': epoch,
             }
-            #if not os.path.isdir('checkpoint'):
-            #    os.mkdir('checkpoint')
-            #torch.save(state, './checkpoint/ckpt.pth')
+            if not os.path.isdir('checkpoint'):
+                os.mkdir('checkpoint')
+            torch.save(state, './checkpoint/ckpt.pth')
             self.best_acc = acc
+
+        epoch_test_loss = test_loss/(batch_idx+1)
+        epoch_test_acc = 100.*correct/total
+        return epoch_test_loss, epoch_test_acc
+
+    def showErrors(self):
+        correct = []
+        wrong = []
+        for i in range (20):
+            images, labels = next (iter (self.testloader))
+
+        # Turn off gradients to speed up this part
+        with torch.no_grad():
+            logps = self.net (images.cuda())
+
+        # Output of the network are log-probabilities, need to take exponential for probabilities
+        ps = torch.exp (logps)
+        probabs = []
+        for j, element in enumerate (ps):
+            pred = torch.argmax(element)
+            if pred == labels[j].item ():
+                correct.append ([images[j], ps[j], pred, labels[j].item ()])
+            else:
+                wrong.append ([images[j], ps[j], pred, labels[j].item ()])
+
+        len (correct), len (wrong)
+        for i in range (10):
+            self.displayErrors(wrong[i][0],wrong[i][1])
+
+    def displayErrors(self,img,ps):
+        classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+        m = nn.Softmax()
+        ps = m(ps)
+        print(ps)
+        ps = ps.cpu().data.numpy().squeeze()
+
+        fig, (ax1, ax2) = plt.subplots(figsize=(6,9), ncols=2)
+        ax1.imshow(img.permute(1,2,0)) #(height,width,dim)
+        ax1.axis('off')
+        ax2.barh(np.arange(10), ps)
+        ax2.set_aspect(0.1)
+        ax2.set_yticks(np.arange(10))
+        ax2.set_yticklabels(classes)
+        ax2.set_title('Class Probability')
+        ax2.set_xlim(0, 1.1)
+        plt.tight_layout()            
 
 '''
 if __name__ == "__main__":
