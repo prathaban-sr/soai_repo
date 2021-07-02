@@ -11,6 +11,9 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import torchvision.transforms as transforms
 
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image, preprocess_image 
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -26,6 +29,7 @@ class ModelTrainer:
         self.best_acc = 0  # best test accuracy
         self.trainloader, self.testloader = self.initializeData()
         self.net, self.optimizer, self.scheduler = self.setupModel(self.device, self.lr)
+        self.wrongimgs = []
 
     def initializeData(self):
         # Data
@@ -68,7 +72,7 @@ class ModelTrainer:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
                     
         return net, optimizer, scheduler
-    
+
     # Training
     def train(self, epoch):
         print('\nEpoch: %d' % epoch)
@@ -155,11 +159,50 @@ class ModelTrainer:
                 correct.append ([images[j], ps[j], pred, labels[j].item ()])
             else:
                 wrong.append ([images[j], ps[j], pred, labels[j].item ()])
+                
+        for x in wrong:
+            self.wrongimgs.append(x[0])
 
         len (correct), len (wrong)
         for i in range (10):
             self.displayErrors(wrong[i][0],wrong[i][1])
 
+    def show_attention(self):
+        #attention_maps = self.net.show_attention(self.wrongimgs)
+        print(self.wrongimgs)
+        
+        wrongimgs_arr = self.wrongimgs.cpu().detach().numpy()
+
+        if self.device == 'cuda':
+            target_layer = self.net.module.layer4[-1]
+        else:
+            target_layer = self.net.layer4[-1]
+
+        # Create an input tensor image for your model..
+        # Note: input_tensor can be a batch tensor with several images!
+        input_tensor =  preprocess_image(wrongimgs_arr, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+
+        # Construct the CAM object once, and then re-use it on many images:
+        cam = GradCAM(model=self.net, target_layer=target_layer, use_cuda=True)
+
+        # If target_category is None, the highest scoring category
+        # will be used for every image in the batch.
+        # target_category can also be an integer, or a list of different integers
+        # for every image in the batch.
+        target_category = None #281
+
+        # You can also pass aug_smooth=True and eigen_smooth=True, to apply smoothing.
+        grayscale_cam = cam(input_tensor=input_tensor, target_category=target_category)
+
+        # In this example grayscale_cam has only one image in the batch:
+        grayscale_cam = grayscale_cam[len(wrongimgs_arr), :]
+        visualization = show_cam_on_image(wrongimgs_arr, grayscale_cam)
+
+        #return visualization
+        grid = torchvision.utils.make_grid(visualization, nrow=5)
+        plt.figure(figsize=(28,28))
+        plt.imshow(np.transpose(grid, (1,2,0)))
+    
     def displayErrors(self,img,ps):
         classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
         m = nn.Softmax()
