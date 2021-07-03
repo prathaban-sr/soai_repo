@@ -69,9 +69,6 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
-    def show_attention(self, imgs):
-        pass
-
 def ResNet18():
     return ResNet(BasicBlock, [2, 2, 2, 2])
 
@@ -79,10 +76,7 @@ def ResNet18():
 def ResNet34():
     return ResNet(BasicBlock, [3, 4, 6, 3])
 
-
 def test():
     net = ResNet18()
     y = net(torch.randn(1, 3, 32, 32))
     print(y.size())
-
-# test()
