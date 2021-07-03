@@ -1,6 +1,5 @@
 '''Train CIFAR10 with PyTorch.'''
 import os
-import cv2
 from typing import no_type_check
 
 import torch
@@ -28,7 +27,7 @@ class ModelTrainer:
         
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.best_acc = 0  # best test accuracy
-        self.trainloader, self.testloader = self.initializeData()
+        self.trainloader, self.testloader, self.testloader_gradcam = self.initializeData()
         self.net, self.optimizer, self.scheduler = self.setupModel(self.device, self.lr)
         self.wrongimgs = []
 
@@ -42,27 +41,32 @@ class ModelTrainer:
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        #transform_test = transforms.Compose([
-        #    transforms.ToTensor(),
-        #    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        #])
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
         
-        transform_test2 = transforms.Compose([
+        transform_gradcam = transforms.Compose([
             transforms.ToTensor(),
         ])
 
-
+        
         trainset = torchvision.datasets.CIFAR10(
             root='./data', train=True, download=True, transform=transform_train)
         trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=128, shuffle=True, num_workers=2)
 
         testset = torchvision.datasets.CIFAR10(
-            root='./data', train=False, download=True, transform=transform_test2)#chaned to test2
+            root='./data', train=False, download=True, transform=transform_test)
         testloader = torch.utils.data.DataLoader(
             testset, batch_size=100, shuffle=False, num_workers=2)
         
-        return trainloader, testloader
+        testset_gradcam = torchvision.datasets.CIFAR10(
+            root='./data_gradcam', train=False, download=True, transform=transform_gradcam)
+        testloader_gradcam = torch.utils.data.DataLoader(
+            testset_gradcam, batch_size=100, shuffle=False, num_workers=2)
+        
+        return trainloader, testloader, testloader_gradcam
 
     def setupModel(self, device, lr):
         # Model
@@ -150,7 +154,7 @@ class ModelTrainer:
         correct = []
         wrong = []
         for i in range (20):
-            images, labels = next (iter (self.testloader))
+            images, labels = next (iter (self.testloader_gradcam))
 
         # Turn off gradients to speed up this part
         with torch.no_grad():
@@ -168,7 +172,7 @@ class ModelTrainer:
 
         for x in wrong[:10]:
             self.wrongimgs.append(x[0])
-            
+        
         len (correct), len (wrong)
         for i in range (10):
             self.displayErrors(wrong[i][0],wrong[i][1])
@@ -206,6 +210,7 @@ class ModelTrainer:
         input_tensors_t = torch.stack(input_tensors)
         print("input_tensors_t.shape:{}".format(input_tensors_t.shape))
         '''
+
         input_tensors_t = torch.stack(self.wrongimgs)
         
         # Construct the CAM object once, and then re-use it on many images:
@@ -220,24 +225,26 @@ class ModelTrainer:
 
         # You can also pass aug_smooth=True and eigen_smooth=True, to apply smoothing.
         grayscale_cam = cam(input_tensor=input_tensors_t, target_category=target_category)
+        # In this example grayscale_cam has only one image in the batch:
+        #grayscale_cam = grayscale_cam[0, :]
         heatmap_arr = []
         use_rgb = False
         for mask in grayscale_cam:
-          heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-          if use_rgb:
-              heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-          heatmap = np.float32(heatmap) / 255
-          heatmap = np.transpose(heatmap, (2, 1, 0))
-          heatmap_arr.append(heatmap)
+            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+            if use_rgb:
+                heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+            heatmap = np.float32(heatmap) / 255
+            heatmap = np.transpose(heatmap, (2, 1, 0))
+            heatmap_arr.append(heatmap)
 
         #if np.max(input_tensors_t[0]) > 1:
         #    raise Exception("The input image should np.float32 in the range [0, 1]")
         visualization_arr = []
 
         for idx,input_tensor in enumerate(input_tensors_t):
-          cam = heatmap_arr[idx] + input_tensor.numpy()
-          cam = cam / np.max(cam)
-          visualization_arr.append(torch.from_numpy(np.uint8(255 * cam)))
+            cam = heatmap_arr[idx] + input_tensor.numpy()
+            cam = cam / np.max(cam)
+            visualization_arr.append(torch.from_numpy(np.uint8(255 * cam)))
           
         visualization_t = torch.stack(visualization_arr[:10])
         #visualization = show_cam_on_image(wrongimgs_arr, grayscale_cam)
@@ -251,8 +258,7 @@ class ModelTrainer:
         grid = torchvision.utils.make_grid(visualization_t, nrow=1)
         plt.figure(figsize=(32,32))
         plt.imshow(np.transpose(grid, (2,1,0)))
-        
-
+            
     def displayErrors(self,img,ps):
         classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
         
