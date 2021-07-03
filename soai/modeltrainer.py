@@ -146,7 +146,7 @@ class ModelTrainer:
         epoch_test_acc = 100.*correct/total
         return epoch_test_loss, epoch_test_acc
 
-    def showErrors(self):
+    def show_errors(self):
         correct = []
         wrong = []
         for i in range (20):
