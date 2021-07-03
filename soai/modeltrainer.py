@@ -1,5 +1,7 @@
 '''Train CIFAR10 with PyTorch.'''
 import os
+import cv2
+
 from typing import no_type_check
 
 import torch
@@ -17,8 +19,24 @@ from pytorch_grad_cam.utils.image import show_cam_on_image, preprocess_image
 import matplotlib.pyplot as plt
 import numpy as np
 
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
 from soai.models.resnet import *
 from soai.utils import progress_bar
+
+class Cifar10SearchDataset(torchvision.datasets.CIFAR10):
+    def __init__(self, root="~/data/cifar10", train=True, download=True, transform=None):
+        super().__init__(root=root, train=train, download=download, transform=transform)
+
+    def __getitem__(self, index):
+        image, label = self.data[index], self.targets[index]
+
+        if self.transform is not None:
+            transformed = self.transform(image=image)
+            image = transformed["image"]
+
+        return image, label
 
 class ModelTrainer:
     def __init__(self):
@@ -29,17 +47,37 @@ class ModelTrainer:
         self.best_acc = 0  # best test accuracy
         self.trainloader, self.testloader, self.testloader_gradcam = self.initializeData()
         self.net, self.optimizer, self.scheduler = self.setupModel(self.device, self.lr)
+        
+        self.train_losses = []
+        self.train_accs = []
+        self.test_losses = []
+        self.test_accs = []
+
         self.wrongimgs = []
 
     def initializeData(self):
         # Data
         print('==> Preparing data..')
+        transform_train = A.Compose ([
+            A.RandomCrop(width=32, height=32),
+            A.Cutout(num_holes=1, max_h_size=16, max_w_size=16, fill_value=(0.4914, 0.4822, 0.4465), always_apply=False, p=0.5),
+            A.Normalize (mean = (0.4914, 0.4822, 0.4465), std = (0.2023, 0.1994, 0.2010)),
+            ToTensorV2()
+        ])
+
+        '''
+        transform_test = A.Compose ([
+            A.Normalize (mean = (0.4914, 0.4822, 0.4465), std = (0.2023, 0.1994, 0.2010)),
+            ToTensorV2()
+        ])
+
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
+        '''
 
         transform_test = transforms.Compose([
             transforms.ToTensor(),
@@ -49,12 +87,10 @@ class ModelTrainer:
         transform_gradcam = transforms.Compose([
             transforms.ToTensor(),
         ])
-
         
-        trainset = torchvision.datasets.CIFAR10(
-            root='./data', train=True, download=True, transform=transform_train)
-        trainloader = torch.utils.data.DataLoader(
-            trainset, batch_size=128, shuffle=True, num_workers=2)
+        trainset = Cifar10SearchDataset(transform=transform_train)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
+                                          shuffle=True, num_workers=2)
 
         testset = torchvision.datasets.CIFAR10(
             root='./data', train=False, download=True, transform=transform_test)
@@ -82,6 +118,29 @@ class ModelTrainer:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
                     
         return net, optimizer, scheduler
+
+    def train_test(self,epoch):
+        start_epoch = 0
+        for epoch in range(start_epoch, start_epoch+epoch):
+            train_loss, train_acc = self.train(epoch)
+            self.train_losses.append(train_loss)
+            self.train_accs.append(train_acc)
+            
+            test_loss, test_acc = self.test(epoch)
+            self.test_losses.append(test_loss)
+            self.test_accs.append(test_acc)
+            self.scheduler.step()
+
+    def show_accuracy_loss_graphs(self):
+        fig, axs = plt.subplots(2,2,figsize=(15,10))
+        axs[0, 0].plot(self.train_losses)
+        axs[0, 0].set_title("Training Loss")
+        axs[1, 0].plot(self.train_accs)
+        axs[1, 0].set_title("Training Accuracy")
+        axs[0, 1].plot(self.test_losses)
+        axs[0, 1].set_title("Test Loss")
+        axs[1, 1].plot(self.test_accs)
+        axs[1, 1].set_title("Test Accuracy")
 
     # Training
     def train(self, epoch):
