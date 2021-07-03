@@ -1,5 +1,6 @@
 '''Train CIFAR10 with PyTorch.'''
 import os
+import cv2
 from typing import no_type_check
 
 import torch
@@ -41,10 +42,15 @@ class ModelTrainer:
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        transform_test = transforms.Compose([
+        #transform_test = transforms.Compose([
+        #    transforms.ToTensor(),
+        #    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        #])
+        
+        transform_test2 = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
+
 
         trainset = torchvision.datasets.CIFAR10(
             root='./data', train=True, download=True, transform=transform_train)
@@ -52,7 +58,7 @@ class ModelTrainer:
             trainset, batch_size=128, shuffle=True, num_workers=2)
 
         testset = torchvision.datasets.CIFAR10(
-            root='./data', train=False, download=True, transform=transform_test)
+            root='./data', train=False, download=True, transform=transform_test2)#chaned to test2
         testloader = torch.utils.data.DataLoader(
             testset, batch_size=100, shuffle=False, num_workers=2)
         
@@ -159,55 +165,99 @@ class ModelTrainer:
                 correct.append ([images[j], ps[j], pred, labels[j].item ()])
             else:
                 wrong.append ([images[j], ps[j], pred, labels[j].item ()])
-                
-        for x in wrong:
-            self.wrongimgs.append(x[0])
 
+        for x in wrong[:10]:
+            self.wrongimgs.append(x[0])
+            
         len (correct), len (wrong)
         for i in range (10):
             self.displayErrors(wrong[i][0],wrong[i][1])
 
     def show_attention(self):
-        #attention_maps = self.net.show_attention(self.wrongimgs)
-        print(self.wrongimgs)
-        
-        wrongimgs_arr = self.wrongimgs.cpu().detach().numpy()
-
         if self.device == 'cuda':
             target_layer = self.net.module.layer4[-1]
         else:
             target_layer = self.net.layer4[-1]
 
-        # Create an input tensor image for your model..
-        # Note: input_tensor can be a batch tensor with several images!
-        input_tensor =  preprocess_image(wrongimgs_arr, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        '''
+        input_tensors = []
+        for in_img in wrongimgs_arr:
+          # Create an input tensor image for your model..
+          # Note: input_tensor can be a batch tensor with several images!
+          print("in_img.shape:{}".format(in_img.shape))
+          dtype = in_img.dtype
+          mean = [0.5,0.5,0.5]
+          std = [0.5,0.5,0.5]
+          mean = torch.as_tensor(mean, dtype=dtype, device=in_img.device)
+          std = torch.as_tensor(std, dtype=dtype, device=in_img.device)
+          if (std == 0).any():
+              raise ValueError('std evaluated to zero after conversion to {}, leading to division by zero.'.format(dtype))
+          if mean.ndim == 1:
+              mean = mean.view(-1, 1, 1)
+          if std.ndim == 1:
+              std = std.view(-1, 1, 1)
+          out_img = in_img.sub_(mean).div_(std)
+    
+          #out_img = preprocess_image(in_img.numpy().astype(np.uint8))
+          input_tensors.append(out_img)
 
+        print("After preprocess")
+
+        input_tensors_t = torch.stack(input_tensors)
+        print("input_tensors_t.shape:{}".format(input_tensors_t.shape))
+        '''
+        input_tensors_t = torch.stack(self.wrongimgs)
+        
         # Construct the CAM object once, and then re-use it on many images:
         cam = GradCAM(model=self.net, target_layer=target_layer, use_cuda=True)
-
+        
         # If target_category is None, the highest scoring category
         # will be used for every image in the batch.
         # target_category can also be an integer, or a list of different integers
         # for every image in the batch.
         target_category = None #281
+        cam.batch_size = 10
 
         # You can also pass aug_smooth=True and eigen_smooth=True, to apply smoothing.
-        grayscale_cam = cam(input_tensor=input_tensor, target_category=target_category)
+        grayscale_cam = cam(input_tensor=input_tensors_t, target_category=target_category)
+        heatmap_arr = []
+        use_rgb = False
+        for mask in grayscale_cam:
+          heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+          if use_rgb:
+              heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+          heatmap = np.float32(heatmap) / 255
+          heatmap = np.transpose(heatmap, (2, 1, 0))
+          heatmap_arr.append(heatmap)
 
-        # In this example grayscale_cam has only one image in the batch:
-        grayscale_cam = grayscale_cam[len(wrongimgs_arr), :]
-        visualization = show_cam_on_image(wrongimgs_arr, grayscale_cam)
+        #if np.max(input_tensors_t[0]) > 1:
+        #    raise Exception("The input image should np.float32 in the range [0, 1]")
+        visualization_arr = []
+
+        for idx,input_tensor in enumerate(input_tensors_t):
+          cam = heatmap_arr[idx] + input_tensor.numpy()
+          cam = cam / np.max(cam)
+          visualization_arr.append(torch.from_numpy(np.uint8(255 * cam)))
+          
+        visualization_t = torch.stack(visualization_arr[:10])
+        #visualization = show_cam_on_image(wrongimgs_arr, grayscale_cam)
 
         #return visualization
-        grid = torchvision.utils.make_grid(visualization, nrow=5)
-        plt.figure(figsize=(28,28))
-        plt.imshow(np.transpose(grid, (1,2,0)))
-    
+        grid_in = torchvision.utils.make_grid(input_tensors_t[:10], nrow=1)
+        plt.figure(figsize=(32,32))
+        plt.imshow(np.transpose(grid_in, (2,1,0)))
+
+        print("Heatmap") 
+        grid = torchvision.utils.make_grid(visualization_t, nrow=1)
+        plt.figure(figsize=(32,32))
+        plt.imshow(np.transpose(grid, (2,1,0)))
+        
+
     def displayErrors(self,img,ps):
         classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+        
         m = nn.Softmax()
         ps = m(ps)
-        print(ps)
         ps = ps.cpu().data.numpy().squeeze()
 
         fig, (ax1, ax2) = plt.subplots(figsize=(6,9), ncols=2)
@@ -220,13 +270,4 @@ class ModelTrainer:
         ax2.set_title('Class Probability')
         ax2.set_xlim(0, 1.1)
         plt.tight_layout()            
-
-'''
-if __name__ == "__main__":
-    trainer = ModelTrainer()
-    start_epoch = 0
-    for epoch in range(start_epoch, start_epoch+200):
-        trainer.train(epoch)
-        trainer.test(epoch)
-        trainer.scheduler.step()
-'''
+        
